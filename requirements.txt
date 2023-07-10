@@ -1,0 +1,8 @@
+dask==2023.7.0
+keybert==0.7.0
+numpy==1.22.2
+Requests==2.31.0
+summa==1.2.0
+tokenizers==0.13.3
+torch==2.0.1
+transformers==4.29.0
