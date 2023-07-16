@@ -1,7 +1,11 @@
 import onnx
 import torch
 import argparse
+import onnxruntime as ort
 from models.ReinforcementLearning.DeepQAgent import DeepQAgentOnnxVersion
+
+import numpy as np
+
 
 def convert_pt_to_onxx(filepath: str, input_size: tuple):
     
@@ -30,25 +34,21 @@ def convert_pt_to_onxx(filepath: str, input_size: tuple):
     
     # model = DeepQAgentOnnxVersion() # REPLACE WITH APPRORIATE MODEL
 
-    model.load_state_dict(torch.load(filepath, map_location=torch.device(DEVICE)))
+    model.load_state_dict(torch.load(filepath, map_location=torch.device(torch.device("cpu"))))
     model.eval()
-    
-    print("BEGIN model parameters:")
-    print(model.parameters)
-    print("END   model parameters.")
 
     dummy_input = torch.zeros(input_size)
     onnx_model_path = f"trained_models/onnx_models/{filepath.split('/')[-1].split('.')[0]}.onnx"
     torch.onnx.export(
         model, dummy_input, 
         onnx_model_path, 
-        verbose=True
+        verbose=True,
+        input_names=["input"], 
+        output_names=["output"]
     )
     
     # Check the model
     onnx_model = onnx.load(onnx_model_path)
-
-    print(f"The model is:\n{onnx_model}")
     
     try:
         onnx.checker.check_model(onnx_model)
@@ -56,6 +56,16 @@ def convert_pt_to_onxx(filepath: str, input_size: tuple):
         print(f"The model is invalid: {e}")
     else:
         print("The model is valid!")
+        print(onnx.helper.printable_graph(onnx_model.graph))
+        
+        print("Running Inference Session...")
+        ort_session = ort.InferenceSession(onnx_model_path)
+
+        outputs = ort_session.run(
+            None,
+            {"input": np.array([[0,0,0, 0,0,0, 0,0,0]]).astype(np.float32)},
+        )
+        print("Inference Results:", outputs[0])
     
 
 if __name__ == "__main__":
