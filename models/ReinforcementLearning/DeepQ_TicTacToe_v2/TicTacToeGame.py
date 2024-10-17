@@ -6,6 +6,7 @@ from enum import Enum
 class OPPONENT_LEVEL(Enum):
     NAIVE   = "naive"
     OPTIMAL = "optimal"
+    AGENT   = "agent"
 
 class TicTacToeGame():
     __name__      = "TicTacToeGame"
@@ -18,12 +19,14 @@ class TicTacToeGame():
     def __init__(
             self,
             device: torch.device,
+            agent: torch.nn.Module,
             opponent_level: OPPONENT_LEVEL = OPPONENT_LEVEL.NAIVE,
             start_as_X: bool = True):
 
         self.device = device
-        self.NAIVE = OPPONENT_LEVEL.NAIVE
-        self.OPTIMAL = OPPONENT_LEVEL.OPTIMAL
+        self.agent = agent
+        if agent != None:
+            self.agent.eval()
         self.set_opponent_level(opponent_level)
 
         self.winner = None
@@ -42,9 +45,9 @@ class TicTacToeGame():
         self.WIN_REWARD = 1
         self.TIE_REWARD = -1
         self.LOSS_REWARD = -2
-
-        self.player2 = self.X if start_as_X else self.O   # the opponent (self)
-        self.player1 = self.O if self.is_X() else self.X  # the agent
+        
+        self.role = self.X if start_as_X else self.O
+        self.agent_role = self.role * -1
 
         if self.is_X():
             # X always goes first.
@@ -56,10 +59,12 @@ class TicTacToeGame():
         opponent_level:
             OPPONENT_LEVEL.NAIVE
             OPPONENT_LEVEL.OPTIMAL
+            OPPONENT_LEVEL.AGENT
         """
         valid_level_options = [
             OPPONENT_LEVEL.NAIVE,
-            OPPONENT_LEVEL.OPTIMAL
+            OPPONENT_LEVEL.OPTIMAL,
+            OPPONENT_LEVEL.AGENT
         ]
         if opponent_level in valid_level_options:
             self.opponent_level = opponent_level
@@ -95,8 +100,8 @@ class TicTacToeGame():
         action: int - must be in the range of [0,8].
         """
         row, col = self.convert_action_to_position(action)
-        if self.is_valid_move(row, col, self.player1):
-            self.board[row][col] = self.player1
+        if self.is_valid_move(row, col, self.agent_role):
+            self.board[row][col] = self.agent_role
             reward, done = self.is_game_over()
 
             if not done:
@@ -151,7 +156,7 @@ class TicTacToeGame():
         return valid_moves, mask, indicies
 
     def opponent_move(self):
-        valid_moves, _, _ = self.get_valid_moves()
+        valid_moves, mask, _ = self.get_valid_moves()
 
         force_naive_move = False
         num_moves = len(valid_moves)
@@ -163,19 +168,27 @@ class TicTacToeGame():
         if self.opponent_level == OPPONENT_LEVEL.NAIVE or force_naive_move:
             # random choice
             move = valid_moves[np.random.choice(len(valid_moves))]
+        elif self.opponent_level == OPPONENT_LEVEL.AGENT:
+            # deep neural network
+            self.agent.eval()
+            with torch.no_grad():
+                q_values = self.agent.forward(self.get_state())
+                q_masked = torch.where(mask != 0, q_values, -1000)
+                action = torch.argmax(q_masked)
+                row, col = self.convert_action_to_position(action)
+                move = [row, col]
         elif self.opponent_level == OPPONENT_LEVEL.OPTIMAL:
             # optimal choice
             scores = []
             board = self.get_state().detach()
-            moves, _, _ = self.get_valid_moves(board=board)
-            for move in moves:
-                board[move[0]][move[1]] = self.player2
-                scores.append(self.minmax(self.player2, self.player1, board))
+            for move in valid_moves:
+                board[move[0]][move[1]] = self.role
+                scores.append(self.minmax(self.role, self.agent_role, board))
                 board[move[0]][move[1]] = 0
 
-            move = moves[np.argmax(scores)]
+            move = valid_moves[torch.argmax(torch.tensor(scores))]
 
-        self.board[move[0]][move[1]] = self.player2
+        self.board[move[0]][move[1]] = self.role
 
     def minmax(self, role, player, board):
         _, done = self.is_game_over(board)
@@ -194,7 +207,7 @@ class TicTacToeGame():
 
         scores = []
         moves, _, _ = self.get_valid_moves(board=board)
-        next_player = self.player1 if player == self.player2 else self.player2
+        next_player = player * -1
         for move in moves:
             board[move[0]][move[1]] = player
             scores.append(self.minmax(role, next_player, board))
@@ -225,7 +238,7 @@ class TicTacToeGame():
 
         reward = self.TIE_REWARD if tie else 0
         if self.winner != None:
-            if self.winner == self.player1:
+            if self.winner == self.agent_role:
                 reward = self.WIN_REWARD  # reward for winning
             else:
                 reward = self.LOSS_REWARD  # reward for losing
@@ -246,10 +259,11 @@ class TicTacToeGame():
         Returns a boolean specifying whether the 
         opponent (this instance) is playing as X.
         """
-        return self.player2 == self.X
+        return self.role == self.X
     
-    def flip_role(self, role):
-        return role * -1
+    def flip_role(self):
+        self.agent_role = self.role
+        self.role *= -1
 
     def reset_board(self):
         self.board.detach()
@@ -262,8 +276,7 @@ class TicTacToeGame():
         self.reset_board()
         
         if flip_roles:
-            self.player1 = self.flip_role(self.player1)  # the agent
-            self.player2 = self.flip_role(self.player2)  # the opponent (self)
+            self.flip_role()
 
         if self.is_X():
             # X always goes first.

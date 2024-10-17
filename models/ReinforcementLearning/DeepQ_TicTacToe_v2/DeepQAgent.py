@@ -54,6 +54,7 @@ class DeepQAgent(nn.Module):
             nn.Linear(hidden_size, action_space)
         )
         self.model.to(device)
+        self.init_weights()
 
     def init_weights(self):
         for parameter in self.model.parameters():
@@ -139,5 +140,5 @@ class DeepQAgent(nn.Module):
         return filepath
 
     def load_model(self, filepath: str = ""):
-        self.load_state_dict(torch.load(filepath))
+        self.load_state_dict(torch.load(filepath, weights_only=True))
         print(f"Model loaded from '{filepath}'.")
