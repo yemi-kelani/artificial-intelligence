@@ -20,8 +20,7 @@ def supply_model(agent_name: str, device: torch.device):
     DROPOUT = 0.25
     TRAIN_START = 1500
     NEGATIVE_SLOPE = 0.01
-    MODEL_PATH = f"../../trained_models/ReinforcementLearning/TicTacToeV2/{
-        agent_name}.pt"
+    MODEL_PATH = f"../../trained_models/ReinforcementLearning/TicTacToeV2/{agent_name}.pt"
 
     agent = DeepQAgent(
         device=DEVICE,
@@ -49,22 +48,30 @@ def get_player_action():
     response = input(construct_prompt("Your turn..."))
 
     single_input_re = r'^\s*[1-9]\s*$'
-    two_input_re = r'^\s*[1-3],?\s+[1-3]\s*$'
+    two_input_re1 = r'^\s*[1-3],\s*[1-3]\s*$'
+    two_input_re2 = r'^\s*[1-3]\s+[1-3]\s*$'
 
     if re.match(single_input_re, response):
         return eval(response.strip()) - 1
 
-    if re.match(two_input_re, response):
-        digits = response.strip().replace(',', '').split(" ")
+    if re.match(two_input_re1, response):
+        digits = response.strip().replace(' ', '').split(',')
         row = eval(digits[0]) - 1
         col = eval(digits[-1]) - 1
         return ((3 * row) + col)
 
+    if re.match(two_input_re2, response):
+        digits = response.strip().split(' ')
+        row = eval(digits[0]) - 1
+        col = eval(digits[-1]) - 1
+        return ((3 * row) + col)
+    
     print(
         colors.wrap_text(
             f"""
             Invalid input: {response}.
-            Regex used to check input: {single_input_re}, {two_input_re}
+            Regex used to check input: {single_input_re}, {two_input_re1},
+            {two_input_re2}
             """,
             colors.RED
         ))
@@ -82,26 +89,28 @@ def reset():
 
 
 def print_game_stats(game_stats):
+    num_wins = game_stats["wins"]
+    num_losses = game_stats["losses"]
+    num_draws = game_stats["draws"]
+    num_games = game_stats["games"]
+    
     print("\n******************************************************")
     print(
         colors.wrap_text(
             "Games won:  "
-            + f"    {game_stats["wins"]} ({round(
-                (game_stats["wins"]/game_stats["games"]) * 100, 4)}%)",
+            + f"    {num_wins}({round((num_wins/num_games) * 100, 4)} %)",
             colors.GREEN
         ))
     print(
         colors.wrap_text(
             "Games drawn:"
-            + f"    {game_stats["draws"]} ({round(
-                (game_stats["draws"]/game_stats["games"]) * 100, 4)}%)",
+            + f"    {num_draws} ({round((num_draws/num_games) * 100, 4)}%)",
             colors.CYAN
         ))
     print(
         colors.wrap_text(
             "Games lost: "
-            + f"    {game_stats["losses"]} ({round(
-                (game_stats["losses"]/game_stats["games"]) * 100, 4)}%)",
+            + f"    {num_losses} ({round((num_losses/num_games) * 100, 4)}%)",
             colors.RED
         ))
     print("******************************************************\n")

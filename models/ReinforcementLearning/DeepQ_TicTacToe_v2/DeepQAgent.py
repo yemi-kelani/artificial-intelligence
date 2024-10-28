@@ -140,5 +140,5 @@ class DeepQAgent(nn.Module):
         return filepath
 
     def load_model(self, filepath: str = ""):
-        self.load_state_dict(torch.load(filepath, weights_only=True))
+        self.load_state_dict(torch.load(filepath, weights_only=True, map_location=self.device))
         print(f"Model loaded from '{filepath}'.")
