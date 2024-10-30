@@ -17,7 +17,7 @@ class colors:
     UNDERLINE = '\033[4m'
 
     @staticmethod
-    def wrap_text(text: str, color:str):
+    def wrap_text(text: str, color: str):
         return color + text + colors.ENDCOLOR
 
 
