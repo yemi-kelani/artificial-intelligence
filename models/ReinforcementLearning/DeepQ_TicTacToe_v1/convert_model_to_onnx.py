@@ -2,7 +2,7 @@ import onnx
 import torch
 import argparse
 import onnxruntime as ort
-from models.ReinforcementLearning.DeepQ_TicTacToe_v1.DeepQAgent import DeepQAgentOnnxVersion
+from DeepQAgent import DeepQAgentOnnxVersion
 
 import numpy as np
 

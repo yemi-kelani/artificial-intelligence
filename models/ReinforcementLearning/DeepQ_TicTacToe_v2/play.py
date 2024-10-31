@@ -1,10 +1,9 @@
-import os
 import re
 import torch
 import argparse
-from .TicTacToeGame import TicTacToeGame, OPPONENT_LEVEL
-from .DeepQAgent import DeepQAgent
-from Utils import colors
+from models.common import colors, get_root_directory
+from models.ReinforcementLearning.DeepQ_TicTacToe_v2.DeepQAgent import DeepQAgent
+from models.ReinforcementLearning.DeepQ_TicTacToe_v2.TicTacToeGame import TicTacToeGame, OPPONENT_LEVEL
 
 
 def supply_model(agent_name: str, device: torch.device):
@@ -20,10 +19,12 @@ def supply_model(agent_name: str, device: torch.device):
     DROPOUT = 0.25
     TRAIN_START = 1500
     NEGATIVE_SLOPE = 0.01
-    MODEL_PATH = f"../../trained_models/ReinforcementLearning/TicTacToeV2/{agent_name}.pt"
+    
+    root_directory = get_root_directory()
+    MODEL_PATH = f"{root_directory}/trained_models/ReinforcementLearning/TicTacToeV2/{agent_name}.pt"
 
     agent = DeepQAgent(
-        device=DEVICE,
+        device=device,
         epsilon=EPSILON,
         gamma=GAMMA,
         state_space=STATE_SPACE,
@@ -116,7 +117,7 @@ def print_game_stats(game_stats):
     print("******************************************************\n")
 
 
-def play(environment: TicTacToeGame):
+def run_session(environment: TicTacToeGame):
 
     environment.agent.eval()
 
@@ -220,7 +221,7 @@ def determine_model_name(model_identifier: str):
     return model_id
 
 
-if __name__ == "__main__":
+def play():
     parser = argparse.ArgumentParser(
         prog='play',
         description="""
@@ -256,4 +257,9 @@ if __name__ == "__main__":
     enemy = supply_model(model_name, DEVICE)
     environment = TicTacToeGame(
         DEVICE, enemy, OPPONENT_LEVEL.AGENT, start_as_X=True)
-    play(environment)
+    
+    run_session(environment)
+    
+
+if __name__ == "__main__":
+    play()
