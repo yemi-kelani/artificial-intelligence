@@ -145,7 +145,7 @@ def run_session(environment: TicTacToeGame):
 
         Example input: 1 2
         Example input: 2,3
-        Example input: 3, 0
+        Example input: 3, 3
         """
     )
     environment.print_state()
