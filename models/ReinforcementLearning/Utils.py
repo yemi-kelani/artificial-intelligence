@@ -1,9 +1,9 @@
+from logging import raiseExceptions
 import torch
 import random
 import numpy as np
 from tqdm import tqdm
 from datetime import datetime
-from DeepQ_TicTacToe_v2 import DeepQAgent
 
 
 def set_seed(seed: int):
@@ -16,16 +16,43 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
 
 
+
+def int2tag(num: int):
+    if num <= 0:
+        return ""
+    elif num < 100:
+        return str(num)
+    elif num < 1000:
+        return str(round(num, -2)) + "K"
+    else:
+        return str(int(round(num, -3) / 1000)) + "K"
+
+
 def train_agent(
-    agent: DeepQAgent,
+    agent,
     environment,
     num_episodes: int,
     optimizer,
     criterion,
     device: torch.device,
     save_path: str = "./",
-    model_name: str = ""
+    model_name: str = "",
+    save_every: int = -1,
+    epsilon_min_value: int = 0.0,
+    epsilon_max_value: int = 1.0
 ):
+    if save_every <= 0 or save_every > num_episodes:
+        save_every = num_episodes
+
+    epsilon_min_value = max(0, epsilon_min_value)
+    epsilon_max_value = min(1.0, epsilon_max_value)
+    if epsilon_min_value >= epsilon_max_value:
+        raise Exception(
+          f"""
+          (train_agent:Utils.py) 
+          epsilon_min_value cannot exceed epsilon_max_value.
+          """)
+
     if model_name == "":
         time = datetime.now().strftime("%H:%M:%S")
         agent_name = f"{agent.__name__}-{agent.__version__}"
@@ -62,12 +89,19 @@ def train_agent(
         environment.print_state()
         environment.reset()
 
-    agent.save_model(save_path, model_name)
+        if agent.epsilon <= epsilon_min_value:
+            agent.epsilon = epsilon_max_value
+
+        if ((episode + 1) % save_every) == 0:
+            episode_tag = int2tag(episode + 1)
+            checkpoint_name = f"{model_name}-{episode_tag}"
+            agent.save_model(save_path, checkpoint_name)
+
     return reward_history
 
 
 def test_agent(
-    agent: DeepQAgent,
+    agent,
     environment,
     num_episodes: int,
     print_state: bool = False

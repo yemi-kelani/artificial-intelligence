@@ -24,8 +24,10 @@ class DeepQAgent(nn.Module):
             hidden_size: int = 256,
             dropout: float = 0.15,
             train_start: int = 100,
-            batch_size: int = 64,
-            negative_slope=0.01):
+            batch_size: int = 256,
+            negative_slope: float = 0.01,
+            memory_max_len: int = 5000
+            ):
 
         super(DeepQAgent, self).__init__()
         self.PT_EXTENSION = ".pt"
@@ -40,7 +42,8 @@ class DeepQAgent(nn.Module):
         self.train_start = train_start
         self.batch_size = batch_size
         self.negative_slope = negative_slope
-        self.memory = deque(maxlen=2000)
+        self.memory = deque(maxlen=memory_max_len)
+        self.memory_max_len = memory_max_len
         self.model = nn.Sequential(
             nn.Linear(state_space, hidden_size),
             nn.Dropout(dropout),
@@ -89,7 +92,11 @@ class DeepQAgent(nn.Module):
             return torch.argmax(q_masked)
 
     def decay_epsilon(self):
-        if len(self.memory) > self.train_start:
+        memory_length = len(self.memory)
+        if memory_length >= self.train_start \
+            or (self.memory_max_len > self.train_start \
+                and memory_length == self.memory_max_len):
+            
             if self.epsilon > self.epsilon_min:
                 self.epsilon *= self.epsilon_decay_rate
 
