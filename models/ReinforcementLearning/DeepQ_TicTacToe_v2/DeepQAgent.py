@@ -26,9 +26,9 @@ class DeepQAgent(nn.Module):
             hidden_size: int = 256,
             dropout: float = 0.15,
             train_start: int = 100,
-            batch_size: int = 256,
+            batch_size: int = 128,
             negative_slope: float = 0.01,
-            memory_max_len: int = 5000
+            memory_max_len: int = 2000
     ):
 
         super(DeepQAgent, self).__init__()
@@ -37,6 +37,7 @@ class DeepQAgent(nn.Module):
         self.device = device
         self.epsilon = epsilon
         self.epsilon_min = 0.001 * epsilon
+        self.epsilon_max = 1.0
         self.epsilon_decay_rate = 0.999
         self.cosine_anneal = False
         self.gamma = gamma
@@ -52,9 +53,9 @@ class DeepQAgent(nn.Module):
             nn.Dropout(dropout),
             nn.LeakyReLU(negative_slope=negative_slope),
             nn.Linear(hidden_size, hidden_size),
-            nn.Dropout(dropout),
-            nn.LeakyReLU(negative_slope=negative_slope),
-            nn.Linear(hidden_size, hidden_size),
+            # nn.Dropout(dropout),
+            # nn.LeakyReLU(negative_slope=negative_slope),
+            # nn.Linear(hidden_size, hidden_size),
             nn.Dropout(dropout),
             nn.LeakyReLU(negative_slope=negative_slope),
             nn.Linear(hidden_size, action_space)
@@ -91,11 +92,12 @@ class DeepQAgent(nn.Module):
         if np.random.rand() <= self.epsilon:
             return np.random.choice(indicies)
         else:
-            q_values = self.forward(state)
-
-            # mask out invalid actions with -1000
-            q_masked = torch.where(mask != 0, q_values, -1000)
-            return torch.argmax(q_masked)
+            with torch.no_grad():
+                q_values = self.forward(state)
+                
+                # mask out invalid actions with -1000
+                q_masked = torch.where(mask != 0, q_values, -1000)
+                return torch.argmax(q_masked)
 
     def prep_cosine_anneal(self, epsilon_min, epsilon_max, num_episodes):
         self.anneal = True
@@ -117,17 +119,21 @@ class DeepQAgent(nn.Module):
             self.epsilon = self.cosine_anneal(episode)
         else:
             if self.epsilon > self.epsilon_min:
-                self.epsilon *= self.epsilon_decay_rate
+                self.epsilon = self.epsilon_min + (self.epsilon_max - self.epsilon_min) * \
+        np.exp(-1. * episode / self.epsilon_decay_rate)
 
     def remember(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done))
 
     def replay(self, optimizer, criterion, episode: int = None):
-        if len(self.memory) < self.train_start:
+        memory_length = len(self.memory)
+        if memory_length < self.train_start or memory_length < self.batch_size:
             return
+        
+        running_loss = 0.0
 
         batch = random.sample(self.memory, min(
-            len(self.memory), self.batch_size))
+            memory_length, self.batch_size))
         for state, action, reward, next_state, done in batch:
 
             q_values = self.forward(state)
@@ -149,18 +155,21 @@ class DeepQAgent(nn.Module):
 
             # optimize the model
             loss = criterion(self.forward(state), q_values)
-            self.loss_history.append(loss.item())
+            running_loss += loss.item()
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
+        loss_average = running_loss / self.batch_size
+        self.loss_history.append(loss_average)
         self.decay_epsilon(episode)
 
     def print_loss_history(self):
-        history_length = self.loss_history
-        if self.loss_history is not None and history_length > 0:
-            plt.plot([i for i in range(history_length)], self.loss_history)
-            plt.show()
+        plt.plot([i for i in range(len(self.loss_history))], self.loss_history)
+        plt.title("Average Loss per Replay")
+        plt.xlabel("Replays")
+        plt.ylabel("Loss")
+        plt.show()
 
     def clear_loss_history(self):
         del self.loss_history

@@ -71,6 +71,13 @@ def train_agent(
             _, mask, indicies = environment.get_valid_moves()
             action = agent.select_action(state, mask, indicies)
             next_state, reward, done = environment.take_action(action)
+            
+            
+            # EXPERIMENTAL >
+            if not done:
+                reward, done = environment.after_action()
+            # EXPERIMENTAL <
+            
             agent.remember(state, action, reward, next_state, done)
             state = next_state.to(device) if next_state is not None else None
             agent.replay(optimizer, criterion, episode)

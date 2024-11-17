@@ -109,11 +109,14 @@ class TicTacToeGame():
         self.board[row][col] = self.agent_role
         reward, done = self.is_game_over()
         
-        if not done:
-            reward, done = self.move()
+        # if not done:
+        #     reward, done = self.move()
         
         next_state = self.get_state()
         return next_state, reward, done
+    
+    def after_action(self):
+        return self.move()
 
     def is_valid_move(self, row: int, col: int, player: int):
         """
