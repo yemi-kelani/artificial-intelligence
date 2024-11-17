@@ -1,9 +1,11 @@
 import os
+import re
 import torch
 import torch.nn as nn
 import random
 import numpy as np
 from collections import deque
+import matplotlib.pyplot as plt
 
 
 class DeepQAgent(nn.Module):
@@ -24,10 +26,10 @@ class DeepQAgent(nn.Module):
             hidden_size: int = 256,
             dropout: float = 0.15,
             train_start: int = 100,
-            batch_size: int = 256,
+            batch_size: int = 128,
             negative_slope: float = 0.01,
-            memory_max_len: int = 5000
-            ):
+            memory_max_len: int = 2000
+    ):
 
         super(DeepQAgent, self).__init__()
         self.PT_EXTENSION = ".pt"
@@ -35,7 +37,9 @@ class DeepQAgent(nn.Module):
         self.device = device
         self.epsilon = epsilon
         self.epsilon_min = 0.001 * epsilon
+        self.epsilon_max = 1.0
         self.epsilon_decay_rate = 0.999
+        self.cosine_anneal = False
         self.gamma = gamma
         self.state_space = state_space
         self.action_space = action_space
@@ -49,15 +53,16 @@ class DeepQAgent(nn.Module):
             nn.Dropout(dropout),
             nn.LeakyReLU(negative_slope=negative_slope),
             nn.Linear(hidden_size, hidden_size),
-            nn.Dropout(dropout),
-            nn.LeakyReLU(negative_slope=negative_slope),
-            nn.Linear(hidden_size, hidden_size),
+            # nn.Dropout(dropout),
+            # nn.LeakyReLU(negative_slope=negative_slope),
+            # nn.Linear(hidden_size, hidden_size),
             nn.Dropout(dropout),
             nn.LeakyReLU(negative_slope=negative_slope),
             nn.Linear(hidden_size, action_space)
         )
         self.model.to(device)
         self.init_weights()
+        self.loss_history = []
 
     def init_weights(self):
         for parameter in self.model.parameters():
@@ -87,28 +92,48 @@ class DeepQAgent(nn.Module):
         if np.random.rand() <= self.epsilon:
             return np.random.choice(indicies)
         else:
-            q_values = self.forward(state)
-            q_masked = torch.where(mask != 0, q_values, -1000)
-            return torch.argmax(q_masked)
+            with torch.no_grad():
+                q_values = self.forward(state)
+                
+                # mask out invalid actions with -1000
+                q_masked = torch.where(mask != 0, q_values, -1000)
+                return torch.argmax(q_masked)
 
-    def decay_epsilon(self):
-        memory_length = len(self.memory)
-        if memory_length >= self.train_start \
-            or (self.memory_max_len > self.train_start \
-                and memory_length == self.memory_max_len):
-            
+    def prep_cosine_anneal(self, epsilon_min, epsilon_max, num_episodes):
+        self.anneal = True
+        self.cosine_anneal = lambda episode: epsilon_min + \
+            (1/2) * (epsilon_max - epsilon_min) * \
+            (1 + np.cos((episode / num_episodes) * np.pi))
+
+    def decay_epsilon(self, episode: int = None):
+        if self.anneal:
+            if episode is None:
+                raise ValueError(
+                    f"""(decay_epsilon:DeepQAgent.py) 
+                    Must pass episode number in order to perform cosine annealing. 
+                    Recieved {episode}.""")
+            if self.cosine_anneal is None:
+                raise ValueError(
+                    f"""(decay_epsilon:DeepQAgent.py) Cosine anneal has not been prepared. 
+                    Run 'prep_cosine_anneal' before training.""")
+            self.epsilon = self.cosine_anneal(episode)
+        else:
             if self.epsilon > self.epsilon_min:
-                self.epsilon *= self.epsilon_decay_rate
+                self.epsilon = self.epsilon_min + (self.epsilon_max - self.epsilon_min) * \
+        np.exp(-1. * episode / self.epsilon_decay_rate)
 
     def remember(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done))
 
-    def replay(self, optimizer, criterion):
-        if len(self.memory) < self.train_start:
+    def replay(self, optimizer, criterion, episode: int = None):
+        memory_length = len(self.memory)
+        if memory_length < self.train_start or memory_length < self.batch_size:
             return
+        
+        running_loss = 0.0
 
         batch = random.sample(self.memory, min(
-            len(self.memory), self.batch_size))
+            memory_length, self.batch_size))
         for state, action, reward, next_state, done in batch:
 
             q_values = self.forward(state)
@@ -130,15 +155,36 @@ class DeepQAgent(nn.Module):
 
             # optimize the model
             loss = criterion(self.forward(state), q_values)
+            running_loss += loss.item()
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-        self.decay_epsilon()
+        loss_average = running_loss / self.batch_size
+        self.loss_history.append(loss_average)
+        self.decay_epsilon(episode)
+
+    def print_loss_history(self):
+        plt.plot([i for i in range(len(self.loss_history))], self.loss_history)
+        plt.title("Average Loss per Replay")
+        plt.xlabel("Replays")
+        plt.ylabel("Loss")
+        plt.show()
+
+    def clear_loss_history(self):
+        del self.loss_history
+        self.loss_history = []
 
     def save_model(self, destination_path: str = "./", name: str = ""):
         if not os.path.exists(destination_path):
             os.makedirs(destination_path, exist_ok=True)
+
+        match = re.search(r'\d+K\+-?\d+K', name, re.IGNORECASE)
+        if match:
+            tag = match.group(0)
+            total = eval(tag.upper().replace("K", "").replace("-", ""))
+            name = name.replace(tag, f"{total}K")
+
         filename = name if name.endswith(
             self.PT_EXTENSION) else name + self.PT_EXTENSION
         filepath = os.path.join(destination_path, filename)
@@ -147,5 +193,6 @@ class DeepQAgent(nn.Module):
         return filepath
 
     def load_model(self, filepath: str = ""):
-        self.load_state_dict(torch.load(filepath, weights_only=True, map_location=self.device))
+        self.load_state_dict(torch.load(
+            filepath, weights_only=True, map_location=self.device))
         print(f"Model loaded from '{filepath}'.")

@@ -4,9 +4,10 @@ from enum import Enum
 
 
 class OPPONENT_LEVEL(Enum):
-    NAIVE   = "naive"
+    NAIVE = "naive"
     OPTIMAL = "optimal"
-    AGENT   = "agent"
+    AGENT = "agent"
+
 
 class TicTacToeGame():
     __name__      = "TicTacToeGame"
@@ -41,17 +42,17 @@ class TicTacToeGame():
             self.O: "O",
             self.SPACE: " "
         }
-        
+
         self.WIN_REWARD = 1
-        self.TIE_REWARD = -1
-        self.LOSS_REWARD = -2
-        
+        self.TIE_REWARD = 0
+        self.LOSS_REWARD = -1
+
         self.role = self.X if start_as_X else self.O
         self.agent_role = self.role * -1
 
         if self.is_X():
             # X always goes first.
-            self.opponent_move()
+            self.make_move()
 
     def set_opponent_level(self, opponent_level: OPPONENT_LEVEL):
         """
@@ -100,18 +101,22 @@ class TicTacToeGame():
         action: int - must be in the range of [0,8].
         """
         row, col = self.convert_action_to_position(action)
-        if self.is_valid_move(row, col, self.agent_role):
-            self.board[row][col] = self.agent_role
-            reward, done = self.is_game_over()
+        if not self.is_valid_move(row, col, self.agent_role):
+            raise Exception(f"""
+                (take_action:TicTacToeGame.py) Invalid move: {action}.
+                """)
 
-            if not done:
-                self.opponent_move()
-                reward, done = self.is_game_over()
-        else:
-            reward, done = -100, True  # Invalid move
-
+        self.board[row][col] = self.agent_role
+        reward, done = self.is_game_over()
+        
+        # if not done:
+        #     reward, done = self.move()
+        
         next_state = self.get_state()
         return next_state, reward, done
+    
+    def after_action(self):
+        return self.move()
 
     def is_valid_move(self, row: int, col: int, player: int):
         """
@@ -155,16 +160,28 @@ class TicTacToeGame():
 
         return valid_moves, mask, indicies
 
-    def opponent_move(self):
+    def move(self):
+        remainder = torch.where(self.board != 0, 1.0, 0.0).sum() % 2
+        if self.is_X() and remainder == 1 or not self.is_X() and remainder == 0:
+            raise Exception(f"""
+                            (move:TicTacToeGame.py) 
+                            Attempting to make a move during the opponent's turn. 
+                            """)
+
+        self.make_move()
+        reward, done = self.is_game_over()
+        return reward, done
+
+    def make_move(self):
         valid_moves, mask, _ = self.get_valid_moves()
 
         force_naive_move = False
         num_moves = len(valid_moves)
         if num_moves == 0:
             return
-        elif num_moves > 7:
+        elif num_moves > 7 and self.opponent_level == OPPONENT_LEVEL.OPTIMAL:
             force_naive_move = True
-        
+
         if self.opponent_level == OPPONENT_LEVEL.NAIVE or force_naive_move:
             # random choice
             move = valid_moves[np.random.choice(len(valid_moves))]
@@ -236,6 +253,7 @@ class TicTacToeGame():
         tie = self.winner == None \
             and torch.where(board != 0, 1.0, 0.0).sum() == 9
 
+        # compute reward
         reward = self.TIE_REWARD if tie else 0
         if self.winner != None:
             if self.winner == self.agent_role:
@@ -260,7 +278,7 @@ class TicTacToeGame():
         opponent (this instance) is playing as X.
         """
         return self.role == self.X
-    
+
     def flip_role(self):
         self.agent_role = self.role
         self.role *= -1
@@ -274,17 +292,17 @@ class TicTacToeGame():
         self.winner = None
         self.__lastWinner = None
         self.reset_board()
-        
+
         if flip_roles:
             self.flip_role()
 
         if self.is_X():
             # X always goes first.
-            self.opponent_move()
+            self.make_move()
 
     def print_state(self):
         self.print_board()
-    
+
     def print_board(self, board=None):
         board = self.board if board == None else board
         print("_______")

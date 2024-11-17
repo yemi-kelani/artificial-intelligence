@@ -47,6 +47,9 @@ def construct_prompt(text: str):
 
 def get_player_action():
     response = input(construct_prompt("Your turn..."))
+    
+    if response.lower() == "q":
+        exit()
 
     single_input_re = r'^\s*[1-9]\s*$'
     two_input_re1 = r'^\s*[1-3],\s*[1-3]\s*$'
@@ -99,7 +102,7 @@ def print_game_stats(game_stats):
     print(
         colors.wrap_text(
             "Games won:  "
-            + f"    {num_wins}({round((num_wins/num_games) * 100, 4)} %)",
+            + f"    {num_wins} ({round((num_wins/num_games) * 100, 4)} %)",
             colors.GREEN
         ))
     print(
@@ -198,18 +201,9 @@ def run_session(environment: TicTacToeGame):
 
 
 def determine_model_name(model_identifier: str):
-    model_id = model_identifier.strip().replace('.pt', '')
+    model_id = model_identifier.strip().replace(".pt", "")
     known_models = {
-        "BASELINE":  "TicTacToev2-Baseline-Untrained",
-        "NAIVE_2K":  "TicTacToev2-NAIVE-2K",
-        "NAIVE_4K":  "TicTacToev2-NAIVE-4K",
-        "NAIVE_6K":  "TicTacToev2-NAIVE-6K",
-        "NAIVE_8K":  "TicTacToev2-NAIVE-8K",
-        "NAIVE_10K": "TicTacToev2-NAIVE-10K",
-        "AGENT_1K":  "TicTacToev2-AGENT-1K",
-        "AGENT_2K":  "TicTacToev2-AGENT-2K",
-        "AGENT_3K":  "TicTacToev2-AGENT-3K",
-        "AGENT_4K":  "TicTacToev2-AGENT-4K",
+        "BASELINE":  "TicTacToe-v2-BASELINE"
     }
 
     model_id_upper = model_id.upper()

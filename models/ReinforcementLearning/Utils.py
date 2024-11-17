@@ -16,14 +16,13 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
 
 
-
 def int2tag(num: int):
     if num <= 0:
         return ""
     elif num < 100:
         return str(num)
     elif num < 1000:
-        return str(round(num, -2)) + "K"
+        return str(round(num, -2))
     else:
         return str(int(round(num, -3) / 1000)) + "K"
 
@@ -72,9 +71,16 @@ def train_agent(
             _, mask, indicies = environment.get_valid_moves()
             action = agent.select_action(state, mask, indicies)
             next_state, reward, done = environment.take_action(action)
+            
+            
+            # EXPERIMENTAL >
+            if not done:
+                reward, done = environment.after_action()
+            # EXPERIMENTAL <
+            
             agent.remember(state, action, reward, next_state, done)
             state = next_state.to(device) if next_state is not None else None
-            agent.replay(optimizer, criterion)
+            agent.replay(optimizer, criterion, episode)
 
             steps += 1
             reward_total += reward
