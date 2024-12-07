@@ -102,20 +102,25 @@ class TicTacToeGame():
         """
         row, col = self.convert_action_to_position(action)
         if not self.is_valid_move(row, col, self.agent_role):
+            self.print_board()
             raise Exception(f"""
                 (take_action:TicTacToeGame.py) Invalid move: {action}.
+                Agent Role: {self.agent_role} ({self.positions[self.agent_role]}),
+                State: {self.get_state()}.
                 """)
 
         self.board[row][col] = self.agent_role
         reward, done = self.is_game_over()
         
+        # EXPERIMENTAL >
         # if not done:
         #     reward, done = self.move()
+        # EXPERIMENTAL <
         
         next_state = self.get_state()
         return next_state, reward, done
     
-    def after_action(self):
+    def resolve_enviornment(self):
         return self.move()
 
     def is_valid_move(self, row: int, col: int, player: int):
@@ -190,7 +195,7 @@ class TicTacToeGame():
             self.agent.eval()
             with torch.no_grad():
                 q_values = self.agent.forward(self.get_state())
-                q_masked = torch.where(mask != 0, q_values, -1000)
+                q_masked = torch.where(mask != 0, q_values, float('-inf'))
                 action = torch.argmax(q_masked)
                 row, col = self.convert_action_to_position(action)
                 move = [row, col]

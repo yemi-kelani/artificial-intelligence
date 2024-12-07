@@ -1,4 +1,3 @@
-from logging import raiseExceptions
 import torch
 import random
 import numpy as np
@@ -46,7 +45,7 @@ def train_agent(
     epsilon_min_value = max(0, epsilon_min_value)
     epsilon_max_value = min(1.0, epsilon_max_value)
     if epsilon_min_value >= epsilon_max_value:
-        raise Exception(
+        raise ValueError(
           f"""
           (train_agent:Utils.py) 
           epsilon_min_value cannot exceed epsilon_max_value.
@@ -58,12 +57,14 @@ def train_agent(
         environment_name = f"{environment.__name__}-{environment.__version__}"
         model_name = f"{agent_name}_{environment_name}_{time}"
 
+    agent.clear_loss_history()
     agent.train()
     reward_history = []
     for episode in range(num_episodes):
         state = environment.get_state()
 
         steps = 0
+        sync_steps = 0
         reward_total = 0
         done = False
 
@@ -72,30 +73,39 @@ def train_agent(
             action = agent.select_action(state, mask, indicies)
             next_state, reward, done = environment.take_action(action)
             
-            
             # EXPERIMENTAL >
             if not done:
-                reward, done = environment.after_action()
+                reward, done = environment.resolve_enviornment()
+                
             # EXPERIMENTAL <
             
             agent.remember(state, action, reward, next_state, done)
             state = next_state.to(device) if next_state is not None else None
             agent.replay(optimizer, criterion, episode)
-
+            
             steps += 1
+            
+            sync_steps += 1
+            if agent.use_target_network and sync_steps >= agent.network_sync_rate:
+                agent.copy_weights(agent.policy_network, agent.target_network)
+                sync_steps = 0
+                
+            
             reward_total += reward
+        
+        agent.replay(optimizer, criterion, episode)
 
         reward_history.append(reward_total)
-
+        episode_loss = agent.loss_history[-1]
         time = datetime.now().strftime("%H:%M:%S")
         print(
-            "episode: {}/{}, steps: {}, reward_total: {}, e: {:.2}, time: {}"
-            .format(episode + 1, num_episodes, steps, reward_total, agent.epsilon, time)
+            "episode: {}/{}, steps: {}, reward_total: {}, loss_avg: {}, e: {:.2}, time: {}"
+            .format(episode + 1, num_episodes, steps, reward_total, episode_loss, agent.epsilon, time)
         )
         environment.print_state()
         environment.reset()
 
-        if agent.epsilon <= epsilon_min_value:
+        if agent.epsilon < epsilon_min_value:
             agent.epsilon = epsilon_max_value
 
         if ((episode + 1) % save_every) == 0:
@@ -127,10 +137,15 @@ def test_agent(
 
             while not done:
                 _, mask, _ = environment.get_valid_moves()
-                q_values = agent.forward(state)
-                q_masked = torch.where(mask != 0, q_values, -1000)
+                q_values = agent.forward(state.reshape((1, agent.action_space)))
+                q_masked = torch.where(mask != 0, q_values, float('-inf'))
                 action = torch.argmax(q_masked)
                 _, reward, done = environment.take_action(action)
+                
+                # EXPERIMENTAL >
+                if not done:
+                    reward, done = environment.resolve_enviornment()
+                # EXPERIMENTAL <
 
                 steps += 1
                 if done:
@@ -148,7 +163,7 @@ def test_agent(
                 environment.print_state()
             environment.reset()
 
-        print()
+        print("\n")
         print(f"Win rate:  {round((games_won/num_episodes) * 100, 4)}%")
         print(f"Draw rate: {round((games_drawn/num_episodes) * 100, 4)}%")
         print(f"Loss rate: {round((games_lost/num_episodes) * 100, 4)}%")
