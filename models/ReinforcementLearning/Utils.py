@@ -101,7 +101,7 @@ def train_agent(
         reward_history.append(reward_total)
         time = datetime.now().strftime("%H:%M:%S")
         print(
-            "episode: {}/{}, steps: {}, reward_total: {}, loss_avg: {}, e: {:.2}, time: {}"
+            "episode: {}/{}, steps: {}, reward_total: {}, loss_avg: {}, e: {:.4}, time: {}"
             .format(episode + 1, num_episodes, steps, reward_total, loss_avg, agent.epsilon, time)
         )
         

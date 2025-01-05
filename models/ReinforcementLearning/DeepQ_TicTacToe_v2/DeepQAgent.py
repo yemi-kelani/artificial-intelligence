@@ -34,6 +34,7 @@ class DeepQAgent(nn.Module):
 
         super(DeepQAgent, self).__init__()
         self.PT_EXTENSION = ".pt"
+        self.LOG_DETAILS = False
 
         self.device = device
         self.epsilon = epsilon
@@ -47,7 +48,11 @@ class DeepQAgent(nn.Module):
         self.state_space = state_space
         self.hidden_size = hidden_size
         self.action_space = action_space
-        self.train_start = train_start
+        
+        self.train_start = min(train_start, memory_max_len)
+        if train_start >= memory_max_len:
+            print(f"Truncated agent.train_start to agent.memory_max_len: {memory_max_len}.")
+
         self.batch_size = batch_size
         self.memory = deque(maxlen=memory_max_len)
         self.memory_max_len = memory_max_len
@@ -94,6 +99,8 @@ class DeepQAgent(nn.Module):
 
     def copy_weights(self, from_network, to_network):
         to_network.load_state_dict(from_network.state_dict())
+        if self.LOG_DETAILS:
+            print(f"Copied weights from policy network to target network.")
 
     def forward(self, states, use_target_network=False):
         """
@@ -167,12 +174,15 @@ class DeepQAgent(nn.Module):
         q_batch = []
         target_q_batch = []
         for state, action, reward, next_state, done in batch:
+            
+            state = state.float()
+            next_state = next_state.float()
 
             q_values = self.forward(state.reshape((1, self.action_space))).squeeze()
             q_values_next = self.forward(
                 next_state.reshape((1, self.action_space)),
                 use_target_network=self.use_target_network).squeeze()
-            target_q_values = q_values.clone()
+            target_q_values = q_values.detach().clone()
 
             if done:
                 target_q_values[action] = reward
@@ -195,20 +205,24 @@ class DeepQAgent(nn.Module):
         
         # optimize the model
         loss = criterion(torch.stack(q_batch), torch.stack(target_q_batch))
+        self.loss_history.append(loss.item())
+        
         optimizer.zero_grad()
         loss.backward()
 
         # gradient clipping in-place
-        # torch.nn.utils.clip_grad_value_(self.policy_network.parameters(), 1.0)
+        total_norm = torch.nn.utils.clip_grad_norm_(self.policy_network.parameters(), max_norm=1.0)
+        
+        if self.LOG_DETAILS:
+            print(f"clipped gradient norm: {total_norm}")
+            print(f"loss: {loss.item()}")
 
         optimizer.step()
-
-        print(f"Loss: {loss.item()}")
-        self.loss_history.append(loss.item())
+        
         self.decay_epsilon(episode)
 
     def get_loss_history(self, items_from_back: int = 0):
-        if items_from_back == 0:
+        if items_from_back <= 0:
             return self.loss_history
         return self.loss_history[-items_from_back:]
 
@@ -260,4 +274,3 @@ class DeepQAgent(nn.Module):
 
         if self.use_target_network:
             self.copy_weights(self.policy_network, self.target_network)
-            print(f"Copied weights from policy network to target network.")
