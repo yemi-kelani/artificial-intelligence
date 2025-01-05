@@ -27,7 +27,6 @@ class DeepQAgent(nn.Module):
             dropout: float = 0.15,
             train_start: int = 100,
             batch_size: int = 128,
-            negative_slope: float = 0.01,
             memory_max_len: int = 2000,
             use_target_network: bool = True,
             network_sync_rate: int = 10
@@ -50,7 +49,6 @@ class DeepQAgent(nn.Module):
         self.action_space = action_space
         self.train_start = train_start
         self.batch_size = batch_size
-        self.negative_slope = negative_slope
         self.memory = deque(maxlen=memory_max_len)
         self.memory_max_len = memory_max_len
         self.loss_history = []
@@ -92,10 +90,7 @@ class DeepQAgent(nn.Module):
                 # nn.init.xavier_uniform_(parameter)
 
                 # for ReLU, leaky ReLU activations
-                nn.init.kaiming_uniform_(
-                    parameter,
-                    a=self.negative_slope,
-                    nonlinearity='relu')
+                nn.init.kaiming_uniform_(parameter, nonlinearity='relu')
 
     def copy_weights(self, from_network, to_network):
         to_network.load_state_dict(from_network.state_dict())
@@ -156,8 +151,7 @@ class DeepQAgent(nn.Module):
             self.epsilon = self.cosine_anneal(episode)
         else:
             if self.epsilon > self.epsilon_min:
-                self.epsilon = self.epsilon_min + (self.epsilon_max - self.epsilon_min) * \
-                    np.exp(-1. * episode / self.epsilon_decay_rate)
+                self.epsilon *= self.epsilon_decay_rate
 
     def remember(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done))
@@ -174,15 +168,16 @@ class DeepQAgent(nn.Module):
         target_q_batch = []
         for state, action, reward, next_state, done in batch:
 
-            q_values = self.forward(state.reshape((1, self.action_space)))
+            q_values = self.forward(state.reshape((1, self.action_space))).squeeze()
             q_values_next = self.forward(
                 next_state.reshape((1, self.action_space)),
-                use_target_network=self.use_target_network)
+                use_target_network=self.use_target_network).squeeze()
             target_q_values = q_values.clone()
 
             if done:
                 target_q_values[action] = reward
             else:
+                
                 # Below is the Bellman equation. It stipulates that the
                 # state-action (Q) value is its reward plus the max of the
                 # rewards of the next state-action Q values.
@@ -191,19 +186,15 @@ class DeepQAgent(nn.Module):
 
                 # γ is Gamma, the discount factor. This helps train the
                 # model that rewards that are further away are less valuable.
-                target_q_values[action] = reward + \
-                    (self.gamma * torch.max(q_values_next))
+                with torch.no_grad():
+                    target_q_values[action] = reward + \
+                        (self.gamma * torch.max(q_values_next))
 
             q_batch.append(q_values)
             target_q_batch.append(target_q_values)
-
-        # convert to tensor and squeeze
-        # (shape: [batch_size|?, 1, action_space] -> [batch_size|?, action_space])
-        q_batch = torch.stack(q_batch).squeeze()
-        target_q_batch = torch.stack(target_q_batch).squeeze()
-
+        
         # optimize the model
-        loss = criterion(q_batch, target_q_batch)
+        loss = criterion(torch.stack(q_batch), torch.stack(target_q_batch))
         optimizer.zero_grad()
         loss.backward()
 
@@ -212,8 +203,14 @@ class DeepQAgent(nn.Module):
 
         optimizer.step()
 
+        print(f"Loss: {loss.item()}")
         self.loss_history.append(loss.item())
         self.decay_epsilon(episode)
+
+    def get_loss_history(self, items_from_back: int = 0):
+        if items_from_back == 0:
+            return self.loss_history
+        return self.loss_history[-items_from_back:]
 
     def plot_loss_history(self):
         plt.clf()
@@ -263,4 +260,4 @@ class DeepQAgent(nn.Module):
 
         if self.use_target_network:
             self.copy_weights(self.policy_network, self.target_network)
-            print(f"Transferred weights from policy network to target network.")
+            print(f"Copied weights from policy network to target network.")

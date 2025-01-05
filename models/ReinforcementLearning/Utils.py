@@ -42,7 +42,7 @@ def train_agent(
     if save_every <= 0 or save_every > num_episodes:
         save_every = num_episodes
 
-    epsilon_min_value = max(0, epsilon_min_value)
+    epsilon_min_value = max(0.0, epsilon_min_value)
     epsilon_max_value = min(1.0, epsilon_max_value)
     if epsilon_min_value >= epsilon_max_value:
         raise ValueError(
@@ -84,24 +84,27 @@ def train_agent(
             agent.replay(optimizer, criterion, episode)
             
             steps += 1
+            reward_total += reward
             
+            # sync the weights of the policy and target networks
             sync_steps += 1
             if agent.use_target_network and sync_steps >= agent.network_sync_rate:
                 agent.copy_weights(agent.policy_network, agent.target_network)
                 sync_steps = 0
-                
-            
-            reward_total += reward
         
         agent.replay(optimizer, criterion, episode)
+        
+        loss_avg = "n/a"
+        if len(agent.get_loss_history()) > 0:
+            loss_avg = np.sum(agent.get_loss_history(items_from_back=steps)) / steps
 
         reward_history.append(reward_total)
-        episode_loss = agent.loss_history[-1]
         time = datetime.now().strftime("%H:%M:%S")
         print(
             "episode: {}/{}, steps: {}, reward_total: {}, loss_avg: {}, e: {:.2}, time: {}"
-            .format(episode + 1, num_episodes, steps, reward_total, episode_loss, agent.epsilon, time)
+            .format(episode + 1, num_episodes, steps, reward_total, loss_avg, agent.epsilon, time)
         )
+        
         environment.print_state()
         environment.reset()
 
