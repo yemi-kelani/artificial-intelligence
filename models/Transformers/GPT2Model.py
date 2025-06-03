@@ -1,9 +1,12 @@
 import torch
-from transformers import (GPT2Tokenizer,
-                          GPT2LMHeadModel,
-                          pipeline, set_seed,
-                          PhrasalConstraint,
-                          DisjunctiveConstraint)
+from transformers import (
+    GPT2Tokenizer,
+    GPT2LMHeadModel,
+    pipeline, set_seed,
+    PhrasalConstraint,
+    DisjunctiveConstraint
+)
+
 
 class GPT2(torch.nn.Module):
     def __init__(
@@ -16,7 +19,7 @@ class GPT2(torch.nn.Module):
         unfrozen_threshold: int = 6
     ):
         super(GPT2, self).__init__()
-        
+
         set_seed(seed)
 
         if model == "gpt2" or model == "gpt2-small":
@@ -43,7 +46,7 @@ class GPT2(torch.nn.Module):
         else:
             raise ValueError(
                 f"Model type ' {model} ' not supported. [GPT2 __init__()]")
-            
+
         self.tokenizer.add_special_tokens({
             'eos_token': '<|endoftext|>',
             'bos_token': '<|endoftext|>',
@@ -58,20 +61,20 @@ class GPT2(torch.nn.Module):
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         )
-        
+
         # freeze all be last few layers
         for parameter in self.model.parameters():
             parameter.requires_grad = False
 
-        for i, m in enumerate(self.model.transformer.h):        
+        for i, m in enumerate(self.model.transformer.h):
             if i >= unfrozen_threshold:
                 for parameter in m.parameters():
-                    parameter.requires_grad = True 
+                    parameter.requires_grad = True
 
-        for parameter in self.model.transformer.ln_f.parameters():        
+        for parameter in self.model.transformer.ln_f.parameters():
             parameter.requires_grad = True
 
-        for parameter in self.model.lm_head.parameters():        
+        for parameter in self.model.lm_head.parameters():
             parameter.requires_grad = True
 
     def forward(self, text):
@@ -79,7 +82,7 @@ class GPT2(torch.nn.Module):
         encoding.to(self.device)
 
         output = self.model(**encoding)
-        logits = output.logits[:, -1, :] # last hidden state
+        logits = output.logits[:, -1, :]  # last hidden state
 
         return logits
 
@@ -114,7 +117,8 @@ class GPT2(torch.nn.Module):
                 tokenized_constraints = self.tokenizer(
                     concepts, add_special_tokens=False
                 ).input_ids
-                constraints = DisjunctiveConstraint(list(tokenized_constraints))
+                constraints = DisjunctiveConstraint(
+                    list(tokenized_constraints))
                 output = self.model.generate(
                     inputs["input_ids"],
                     constraints=[constraints],
@@ -123,7 +127,7 @@ class GPT2(torch.nn.Module):
                     num_return_sequences=self.num_returns,
                     no_repeat_ngram_size=1,
                     remove_invalid_values=True,
-                ) 
+                )
             else:
                 output = self.model.generate(
                     inputs["input_ids"],

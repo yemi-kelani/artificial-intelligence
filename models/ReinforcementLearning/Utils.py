@@ -4,6 +4,9 @@ import numpy as np
 from tqdm import tqdm
 from datetime import datetime
 
+from models.ReinforcementLearning.DeepQ_TicTacToe_v2.DeepQAgent import DeepQAgent
+from models.ReinforcementLearning.DeepQ_TicTacToe_v2.TicTacToeGame import TicTacToeGame
+
 
 def set_seed(seed: int):
     random.seed(seed)
@@ -27,8 +30,8 @@ def int2tag(num: int):
 
 
 def train_agent(
-    agent,
-    environment,
+    agent: DeepQAgent,
+    environment: TicTacToeGame,
     num_episodes: int,
     optimizer,
     criterion,
@@ -101,7 +104,7 @@ def train_agent(
         reward_history.append(reward_total)
         time = datetime.now().strftime("%H:%M:%S")
         print(
-            "episode: {}/{}, steps: {}, reward_total: {}, loss_avg: {}, e: {:.4}, time: {}"
+            "episode: {}/{}, steps: {}, reward_total: {}, loss_avg: {:.6}, e: {:.4}, time: {}"
             .format(episode + 1, num_episodes, steps, reward_total, loss_avg, agent.epsilon, time)
         )
         
@@ -141,7 +144,7 @@ def test_agent(
             while not done:
                 _, mask, _ = environment.get_valid_moves()
                 q_values = agent.forward(state.reshape((1, agent.action_space)))
-                q_masked = torch.where(mask != 0, q_values, float('-inf'))
+                q_masked = torch.where(mask != 0, q_values, -1e9)
                 action = torch.argmax(q_masked)
                 _, reward, done = environment.take_action(action)
                 

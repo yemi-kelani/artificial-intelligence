@@ -195,7 +195,7 @@ class TicTacToeGame():
             self.agent.eval()
             with torch.no_grad():
                 q_values = self.agent.forward(self.get_state())
-                q_masked = torch.where(mask != 0, q_values, float('-inf'))
+                q_masked = torch.where(mask != 0, q_values, -1e9)
                 action = torch.argmax(q_masked)
                 row, col = self.convert_action_to_position(action)
                 move = [row, col]
@@ -258,7 +258,8 @@ class TicTacToeGame():
         tie = self.winner == None \
             and torch.where(board != 0, 1.0, 0.0).sum() == 9
 
-        # compute reward
+        # compute rewardf, convention is return
+        # rewards for the agent, not the enviornment
         reward = self.TIE_REWARD if tie else 0
         if self.winner != None:
             if self.winner == self.agent_role:
@@ -298,8 +299,8 @@ class TicTacToeGame():
         self.__lastWinner = None
         self.reset_board()
 
-        if flip_roles:
-            self.flip_role()
+        # if flip_roles:
+        #     self.flip_role()
 
         if self.is_X():
             # X always goes first.

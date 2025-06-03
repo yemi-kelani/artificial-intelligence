@@ -60,10 +60,8 @@ class DeepQAgent(nn.Module):
 
         self.policy_network = self.create_network()
         self.init_weights(self.policy_network)
-
-        self.use_target_network = False
+        self.use_target_network = use_target_network
         if use_target_network:
-            self.use_target_network = True
             self.network_sync_rate = network_sync_rate
             self.target_network = self.create_network()
             self.copy_weights(self.policy_network, self.target_network)
@@ -71,6 +69,9 @@ class DeepQAgent(nn.Module):
     def create_network(self):
         network = nn.Sequential(
             nn.Linear(self.state_space, self.hidden_size),
+            nn.Dropout(self.dropout),
+            nn.ReLU(),
+            nn.Linear(self.hidden_size, self.hidden_size),
             nn.Dropout(self.dropout),
             nn.ReLU(),
             nn.Linear(self.hidden_size, self.hidden_size),
@@ -86,8 +87,8 @@ class DeepQAgent(nn.Module):
             if not parameter.requires_grad:
                 continue
 
+            # initialize bias
             if parameter.dim() == 1:
-                # initialize bias
                 nn.init.zeros_(parameter)
 
             if parameter.dim() > 1:
@@ -100,7 +101,7 @@ class DeepQAgent(nn.Module):
     def copy_weights(self, from_network, to_network):
         to_network.load_state_dict(from_network.state_dict())
         if self.LOG_DETAILS:
-            print(f"Copied weights from policy network to target network.")
+            print(f"Copied weights network weights.")
 
     def forward(self, states, use_target_network=False):
         """
@@ -134,7 +135,7 @@ class DeepQAgent(nn.Module):
                 q_values = self.forward(state.reshape((1, self.action_space)))
 
                 # mask out invalid actions with -inf
-                q_masked = torch.where(mask != 0, q_values, float('-inf'))
+                q_masked = torch.where(mask != 0, q_values, -1e9)
 
                 return torch.argmax(q_masked)
 
@@ -157,8 +158,15 @@ class DeepQAgent(nn.Module):
                     Recieved {episode}.""")
             self.epsilon = self.cosine_anneal(episode)
         else:
-            if self.epsilon > self.epsilon_min:
-                self.epsilon *= self.epsilon_decay_rate
+            # if self.epsilon > self.epsilon_min:
+            #     self.epsilon *= self.epsilon_decay_rate
+
+            # stepsize = number of iterations before until
+            # learning rate returns to initial value
+            stepsize = 2000
+            cycle = np.floor(1 + episode / ( 2 * stepsize))
+            x = np.abs(episode/stepsize - 2*cycle + 1)
+            self.epsilon = self.epsilon + (self.epsilon_max - self.epsilon) * np.max(0, 1 - x)
 
     def remember(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done))
@@ -174,15 +182,22 @@ class DeepQAgent(nn.Module):
         q_batch = []
         target_q_batch = []
         for state, action, reward, next_state, done in batch:
-            
-            state = state.float()
-            next_state = next_state.float()
 
-            q_values = self.forward(state.reshape((1, self.action_space))).squeeze()
-            q_values_next = self.forward(
-                next_state.reshape((1, self.action_space)),
-                use_target_network=self.use_target_network).squeeze()
+            state = state.float().reshape((1, self.action_space))
+            q_values = self.forward(state).squeeze()
+            for i, cell in enumerate(state):
+                if cell != 0:
+                    q_values[i] = -1e9
+            
             target_q_values = q_values.detach().clone()
+            
+            next_state = next_state.float().reshape((1, self.action_space))
+            q_values_next = self.forward(
+                next_state,
+                use_target_network=self.use_target_network).squeeze()
+            for i, cell in enumerate(next_state):
+                if cell != 0:
+                    q_values_next[i] = -1e9
 
             if done:
                 target_q_values[action] = reward
@@ -214,6 +229,7 @@ class DeepQAgent(nn.Module):
         total_norm = torch.nn.utils.clip_grad_norm_(self.policy_network.parameters(), max_norm=1.0)
         
         if self.LOG_DETAILS:
+            print(f"\nTarget Q (sample): {target_q_batch[0]}")
             print(f"clipped gradient norm: {total_norm}")
             print(f"loss: {loss.item()}")
 
