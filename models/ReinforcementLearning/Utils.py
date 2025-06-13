@@ -39,137 +39,149 @@ def train_agent(
     save_path: str = "./",
     model_name: str = "",
     save_every: int = -1,
-    epsilon_min_value: int = 0.0,
-    epsilon_max_value: int = 1.0
 ):
-    if save_every <= 0 or save_every > num_episodes:
-        save_every = num_episodes
+    assert agent.epsilon_min <= agent.epsilon_max, "Invalid epsilon range"
+    save_every = min(max(0, save_every), num_episodes)
 
-    epsilon_min_value = max(0.0, epsilon_min_value)
-    epsilon_max_value = min(1.0, epsilon_max_value)
-    if epsilon_min_value >= epsilon_max_value:
-        raise ValueError(
-          f"""
-          (train_agent:Utils.py) 
-          epsilon_min_value cannot exceed epsilon_max_value.
-          """)
-
-    if model_name == "":
-        time = datetime.now().strftime("%H:%M:%S")
-        agent_name = f"{agent.__name__}-{agent.__version__}"
-        environment_name = f"{environment.__name__}-{environment.__version__}"
-        model_name = f"{agent_name}_{environment_name}_{time}"
+    if not model_name:
+        timestamp = datetime.now().strftime("%H%M%S")
+        model_name = f"{agent.__class__.__name__}_{environment.__class__.__name__}_{timestamp}"
 
     agent.clear_loss_history()
     agent.train()
-    reward_history = []
-    for episode in range(num_episodes):
-        state = environment.get_state()
 
-        steps = 0
-        sync_steps = 0
-        reward_total = 0
-        done = False
+    wins = 0
+    draws = 0
+    losses = 0
+    reward_history = []
+
+    # environment.reset(flip_roles=False)
+    for episode in range(num_episodes):
+        state = environment.get_state().to(device)
+        done, reward_total, steps = False, 0, 0
 
         while not done:
-            _, mask, indicies = environment.get_valid_moves()
-            action = agent.select_action(state, mask, indicies)
+            _, mask, indices = environment.get_valid_moves()
+            action = agent.select_action(state, mask, indices)
             next_state, reward, done = environment.take_action(action)
-            
-            # EXPERIMENTAL >
-            if not done:
-                reward, done = environment.resolve_enviornment()
-                
-            # EXPERIMENTAL <
-            
+            next_state = next_state.to(device) if next_state is not None else None
             agent.remember(state, action, reward, next_state, done)
-            state = next_state.to(device) if next_state is not None else None
             agent.replay(optimizer, criterion, episode)
-            
-            steps += 1
+
+            # if game not over, opponent moves, 
+            # but we do NOT "remember" that
+            if not done:
+                next_state, reward, done = environment.move()
+                next_state = next_state.to(device) if next_state is not None else None
+
+            state = next_state
             reward_total += reward
-            
-            # sync the weights of the policy and target networks
-            sync_steps += 1
-            if agent.use_target_network and sync_steps >= agent.network_sync_rate:
-                agent.copy_weights(agent.policy_network, agent.target_network)
-                sync_steps = 0
+            steps += 1
         
-        agent.replay(optimizer, criterion, episode)
-        
-        loss_avg = "n/a"
-        if len(agent.get_loss_history()) > 0:
-            loss_avg = np.sum(agent.get_loss_history(items_from_back=steps)) / steps
+        if agent.use_target_network and (episode + 1) % agent.network_sync_rate == 0:
+            agent.copy_weights(agent.policy_network, agent.target_network)
 
+        # log metrics
         reward_history.append(reward_total)
-        time = datetime.now().strftime("%H:%M:%S")
+        _, _, winner = environment.is_game_over()
+        if winner == environment.agent_role:
+            wins += 1
+        elif winner == environment.role:
+            losses += 1
+        elif winner is None:
+            draws += 1
+        else:
+            print(f"Invalid winner in endgame state: {winner}")
+            environment.print_state()
+            raise Exception(f"Encounter sync issue between agent and environment.")
+
+        loss_avg = np.mean(agent.get_loss_history(items_from_back=steps))
         print(
-            "episode: {}/{}, steps: {}, reward_total: {}, loss_avg: {:.6}, e: {:.4}, time: {}"
-            .format(episode + 1, num_episodes, steps, reward_total, loss_avg, agent.epsilon, time)
+            f"[{episode+1:04d}/{num_episodes}] Steps: {steps}",
+            f"Reward: {reward_total:.2f}, Loss: {loss_avg:.4f}",
+            f"Epsilon: {agent.epsilon:.4f}, Role: {environment.positions[environment.agent_role]}",
+            f"Win: {100 * wins/(episode + 1):.2f}%",
+            f"Draw: {100 * draws/(episode + 1):.2f}%",
+            f"Loss: {100 * losses/(episode + 1):.2f}%"
         )
-        
+
         environment.print_state()
-        environment.reset()
+        environment.reset(flip_roles=True)
+        agent.decay_epsilon(episode)
+        agent.epsilon = max(agent.epsilon, agent.epsilon_min)
+        print(f"Episode {episode}, Epsilon: {agent.epsilon:.4f}")
 
-        if agent.epsilon < epsilon_min_value:
-            agent.epsilon = epsilon_max_value
+        if (episode + 1) % 100 == 0:
+            agent.save_checkpoint(destination_path=save_path)
 
-        if ((episode + 1) % save_every) == 0:
-            episode_tag = int2tag(episode + 1)
-            checkpoint_name = f"{model_name}-{episode_tag}"
-            agent.save_model(save_path, checkpoint_name)
+        if (episode + 1) % save_every == 0:
+            tag = int2tag(episode + 1)
+            agent.save_model(save_path, f"{model_name}-{tag}")
+            if hasattr(agent, "memory") and len(agent.memory) > 10000:
+                agent.memory = agent.memory[-10000:]
 
-    return reward_history
+    return {
+        "rewards": reward_history,
+        "wins": wins,
+        "draws": draws,
+        "losses": losses
+    }
 
 
-def test_agent(
-    agent,
-    environment,
-    num_episodes: int,
-    print_state: bool = False
-):
+def test_agent(agent: DeepQAgent, environment: TicTacToeGame, num_episodes: int, print_state: bool = False):
     agent.eval()
+    results = {
+        "X": {"W": 0, "D": 0, "L": 0, "R": 0}, 
+        "O": {"W": 0, "D": 0, "L": 0, "R": 0}
+    }
+
+    environment.reset(flip_roles=False)
     with torch.no_grad():
+        for _ in tqdm(range(num_episodes)):
+            role = environment.positions[environment.agent_role]
+            state = environment.get_state().to(agent.device)
 
-        games_won = 0
-        games_drawn = 0
-        games_lost = 0
-
-        for episode in tqdm(range(num_episodes)):
-            state = environment.get_state()
-
-            steps = 0
-            done = False
-
+            done, reward_total = False, 0
             while not done:
                 _, mask, _ = environment.get_valid_moves()
                 q_values = agent.forward(state.reshape((1, agent.action_space)))
-                q_masked = torch.where(mask != 0, q_values, -1e9)
-                action = torch.argmax(q_masked)
-                _, reward, done = environment.take_action(action)
+                action = torch.argmax(torch.where(mask != 0, q_values, -1e9))
+                next_state, reward, done = environment.take_action(action)
                 
-                # EXPERIMENTAL >
                 if not done:
-                    reward, done = environment.resolve_enviornment()
-                # EXPERIMENTAL <
+                    next_state, reward, done = environment.move()
+                    
+                state = next_state.to(agent.device) if next_state is not None else None
+                reward_total += reward
 
-                steps += 1
-                if done:
-
-                    if reward == environment.WIN_REWARD:
-                        games_won += 1
-                    elif reward == environment.TIE_REWARD:
-                        games_drawn += 1
-                    elif reward == environment.LOSS_REWARD:
-                        games_lost += 1
-
-                    break
+            results[role]["R"] += reward_total
+            _, _, winner = environment.is_game_over()
+            if winner == environment.agent_role:
+                results[role]["W"] += 1
+            elif winner == environment.role:
+                results[role]["L"] += 1
+            elif winner is None:
+                results[role]["D"] += 1
+            else:
+                print(f"Invalid winner in endgame state: {winner}")
+                environment.print_state()
+                raise Exception(f"Encounter sync issue between agent and environment.")
 
             if print_state:
                 environment.print_state()
-            environment.reset()
+                
+            environment.reset(flip_roles=True)
 
-        print("\n")
-        print(f"Win rate:  {round((games_won/num_episodes) * 100, 4)}%")
-        print(f"Draw rate: {round((games_drawn/num_episodes) * 100, 4)}%")
-        print(f"Loss rate: {round((games_lost/num_episodes) * 100, 4)}%")
+    def summarize(role):
+        count = num_episodes // 2
+        print()
+        print(f"Results as {role}:")
+        print(f"Win rate:  {100 * results[role]['W'] / count:.2f}%")
+        print(f"Draw rate: {100 * results[role]['D'] / count:.2f}%")
+        print(f"Loss rate: {100 * results[role]['L'] / count:.2f}%")
+        print(f"Avg reward: {results[role]['R'] / count:.2f}")
+        print()
+
+    summarize("X")
+    summarize("O")
+    print(f"\nOverall win rate: {100 * (results['X']['W'] + results['O']['W']) / num_episodes:.2f}%\n")

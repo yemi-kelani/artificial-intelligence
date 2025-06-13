@@ -8,32 +8,34 @@ from models.ReinforcementLearning.DeepQ_TicTacToe_v2.TicTacToeGame import TicTac
 
 def supply_model(agent_name: str, device: torch.device):
 
-    BATCH_SIZE = 128
+    EPSILON = 1.0
+    GAMMA = 0.99
     STATE_SPACE = 9
     ACTION_SPACE = 9
-    EPSILON = 1.0
-    GAMMA = 0.99
-    HIDDEN_SIZE = 128
-    EPSILON = 1.0
-    GAMMA = 0.99
-    DROPOUT = 0.25
-    TRAIN_START = 1500
-    NEGATIVE_SLOPE = 0.01
+    HIDDEN_SIZE = 256
+    DROPOUT = 0.1
+    TRAIN_START = 1000
+    BATCH_SIZE = 64
+    MEMORY_MAX_LEN = 10000
+    USE_TARGET_NETWORK = True
+    NETWORK_SYNC_RATE = 100 
     
     root_directory = get_root_directory()
     MODEL_PATH = f"{root_directory}/trained_models/ReinforcementLearning/TicTacToeV2/{agent_name}.pt"
 
     agent = DeepQAgent(
-        device=device,
-        epsilon=EPSILON,
-        gamma=GAMMA,
-        state_space=STATE_SPACE,
-        action_space=ACTION_SPACE,
-        hidden_size=HIDDEN_SIZE,
-        dropout=DROPOUT,
-        train_start=TRAIN_START,
-        batch_size=BATCH_SIZE,
-        negative_slope=NEGATIVE_SLOPE
+        device             = torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+        epsilon            = EPSILON,
+        gamma              = GAMMA,
+        state_space        = STATE_SPACE,
+        action_space       = ACTION_SPACE,
+        hidden_size        = HIDDEN_SIZE,
+        dropout            = DROPOUT,
+        train_start        = TRAIN_START,
+        batch_size         = BATCH_SIZE,
+        memory_max_len     = MEMORY_MAX_LEN,
+        use_target_network = USE_TARGET_NETWORK,
+        network_sync_rate  = NETWORK_SYNC_RATE
     )
 
     agent.load_model(filepath=MODEL_PATH)
@@ -175,6 +177,8 @@ def run_session(environment: TicTacToeGame):
                 action = -1
 
         _, reward, done = environment.take_action(action)
+        _, done, _ = environment.move()
+        
         environment.print_state()
         print()
 
