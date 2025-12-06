@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from enum import Enum
+from .logger import get_logger
 
 
 class OPPONENT_LEVEL(Enum):
@@ -27,9 +28,10 @@ class TicTacToeGame():
 
         self.device = device
         self.agent = agent
-        if agent != None:
-            self.agent.eval()
+        # Don't change agent mode in constructor - let training loop manage this
         self.set_opponent_level(opponent_level)
+        self.LOG_DETAILS = False  # Add logging control
+        self.logger = get_logger(self.__class__.__name__)
 
         self.__lastWinner = None
         self.board = torch.zeros((3, 3))
@@ -37,22 +39,16 @@ class TicTacToeGame():
         self.X = -1
         self.O = 1
         self.SPACE = 0
-        self.positions: map[int, str] = {
+        self.positions: dict[int, str] = {
             self.X: "X",
             self.O: "O",
             self.SPACE: " "
         }
 
-        # base rewards
+        # Base rewards (clean signal for Q-learning)
         self.WIN_REWARD = 1.0
         self.TIE_REWARD = 0.3
         self.LOSS_REWARD = -1.0
-        
-        # strategic rewards
-        self.GOOD_MOVE_REWARD = 0.1
-        self.BAD_MOVE_REWARD = -0.1
-        self.BLOCKING_MOVE_REWARD = 0.2
-        self.FORK_CREATION_REWARD = 0.1
 
         self.role = self.X if start_as_X else self.O
         self.agent_role = self.O if start_as_X else self.X
@@ -90,8 +86,14 @@ class TicTacToeGame():
         Parameters:
         action: int - must be in the range of [0,8].
         """
-        col = action % 3
+        if action not in range(0,9):
+            raise Exception(f"""
+                (convert_action_to_position:TicTacToeGame.py) Invalid action: {action}.
+                Agent Role: {self.agent_role} ({self.positions[self.agent_role]}),
+                State: {self.get_state()}.
+                """)
         row = action // 3
+        col = action % 3
         return row, col
 
     def convert_position_to_action(self, row: int, col: int):
@@ -112,9 +114,8 @@ class TicTacToeGame():
         """
         row, col = self.convert_action_to_position(action)
         if not self.is_valid_move(row, col, self.agent_role):
-            self.print_board()
             raise Exception(f"""
-                (take_action:TicTacToeGame.py) Invalid move: {action}.
+                (take_action:TicTacToeGame.py) Invalid move... action: {action}, row: {row}, col: {col}.
                 Agent Role: {self.agent_role} ({self.positions[self.agent_role]}),
                 State: {self.get_state()}.
                 """)
@@ -135,9 +136,9 @@ class TicTacToeGame():
                 or col >= self.board.size()[1] or col < 0:
             return False
 
+        # if the cell is not empty
+        # the move is not valid
         if self.board[row][col] != 0:
-            # if the cell is not empty
-            # the move is not valid
             return False
 
         # check to see if the # of Xs and Os are balanced
@@ -149,44 +150,38 @@ class TicTacToeGame():
                 print(f"⚠ Board is unbalanced ⚠",
                       f"player: {self.positions[player]}",
                       f"row: {row}, column: {col}",
-                      "Are the players going in the correct order?")
+                      "Are the players moving in the correct order?")
                 self.print_board()
 
         return balanced
 
     def get_valid_moves(self, board=None):
-        board = self.board if board == None else board
-        valid_moves, indicies = [], []
+        board = self.board if board is None else board
+        valid_moves, indices = [], []
         mask = torch.zeros((9,)).to(self.device)
         for j in range(board.size()[0]):
             for i in range(board.size()[1]):
                 if board[j][i] == 0:
                     valid_moves.append((j, i))
                     index = self.convert_position_to_action(j, i)
-                    indicies.append(index)
+                    indices.append(index)
                     mask[index] = 1
 
-        return valid_moves, mask, indicies
+        return valid_moves, mask, indices
 
     def move(self):
         remainder = torch.where(self.board != 0, 1.0, 0.0).sum() % 2
         if self.is_X() and remainder == 1 or not self.is_X() and remainder == 0:
-            raise Exception(f"""
-                            (move:TicTacToeGame.py) 
-                            Attempting to make a move during the opponent's turn. 
-                            """)
-
-        self._make_move()
-        reward, done, _ = self.is_game_over()
-        return self.get_state(), reward, done
-
-    def _make_move(self):
-        valid_moves, mask, _ = self.get_valid_moves()
+            error = "(move:TicTacToeGame.py) Attempting to make a move during the opponent's turn."
+            raise Exception(error)
 
         force_naive_move = False
+
+        valid_moves, mask, _ = self.get_valid_moves()
         num_moves = len(valid_moves)
         if num_moves == 0:
             return
+        
         elif num_moves > 7 and self.opponent_level == OPPONENT_LEVEL.OPTIMAL:
             force_naive_move = True
 
@@ -215,6 +210,11 @@ class TicTacToeGame():
             move = valid_moves[torch.argmax(torch.tensor(scores))]
 
         self.board[move[0]][move[1]] = self.role
+        
+        reward, done, _ = self.is_game_over()
+        next_state = self.get_state()
+        return next_state, reward, done
+
 
     def minmax(self, role, player, board):
         _, done, _ = self.is_game_over(board)
@@ -242,74 +242,57 @@ class TicTacToeGame():
         return max(scores) if player == role else min(scores)
 
     def is_game_over(self, board=None):
-        board = self.board if board == None else board
+        board = self.board if board is None else board
         winner = None
 
         # check rows and columns
-        for i in range(self.board.size()[0]):
+        for i in range(board.size()[0]):
             if board[i][0] == board[i][1] == board[i][2] != 0:
-                winner = board[i][0]
+                winner = board[i][0].item()
+                break
             elif board[0][i] == board[1][i] == board[2][i] != 0:
-                winner = board[0][i]
+                winner = board[0][i].item()
+                break
 
-        # check diagonals
-        if board[0][0] == board[1][1] == board[2][2] != 0:
-            winner = board[0][0]
-        elif board[0][2] == board[1][1] == board[2][0] != 0:
-            winner = board[0][2]
+        # check diagonals (only if no winner found yet)
+        if winner is None:
+            if board[0][0] == board[1][1] == board[2][2] != 0:
+                winner = board[0][0].item()
+            elif board[0][2] == board[1][1] == board[2][0] != 0:
+                winner = board[0][2].item()
 
         # check if there's a tie
-        tie = winner == None \
-            and torch.where(board != 0, 1.0, 0.0).sum() == 9
+        tie = winner is None \
+            and torch.where(board != 0, 1, 0).sum().item() == 9
 
-        # compute rewardf, convention is return
+        # compute reward, convention is return
         # rewards for the agent, not the environment
-        reward = self.TIE_REWARD if tie else 0
-        if winner != None:
+        reward = 0.0
+        if tie:
+            reward = self.TIE_REWARD
+        elif winner is not None:
             if winner == self.agent_role:
                 reward = self.WIN_REWARD  # reward for winning
             else:
                 reward = self.LOSS_REWARD  # reward for losing
-        else:
-            # Check for intermediate rewards
-            if self._is_winning_opportunity(board, self.agent_role):
-                reward += self.GOOD_MOVE_REWARD
-            if self._is_winning_opportunity(board, self.role):
-                reward += self.BLOCKING_MOVE_REWARD
+        # Note: No intermediate rewards - cleaner learning signal
 
-        done = winner != None or tie
+        done = winner is not None or tie
         self.__lastWinner = winner
         return reward, done, winner
-
-    def _is_winning_opportunity(self, board, player):
-        """Check if there's a winning opportunity for the given player."""
-        # Check rows
-        for i in range(3):
-            if ((board[i] == player).sum()) == 2 and (board[i] == self.SPACE).sum() == 1:
-                return True
-            if (board[:, i] == player).sum() == 2 and (board[:, i] == self.SPACE).sum() == 1:
-                return True
-
-        # Check diagonals
-        diag1 = torch.tensor([board[0, 0], board[1, 1], board[2, 2]])
-        diag2 = torch.tensor([board[0, 2], board[1, 1], board[2, 0]])
-        if (diag1 == player).sum() == 2 and (diag1 == self.SPACE).sum() == 1:
-            return True
-        if (diag2 == player).sum() == 2 and (diag2 == self.SPACE).sum() == 1:
-            return True
-
-        return False
 
     def is_X(self):
         """
         Returns a boolean specifying whether the 
-        opponent (this instance) is playing as X.
+        opponent/environment (this instance) is 
+        playing as X.
         """
         return self.role == self.X
 
     def flip_roles(self):
-        self.agent_role = self.role
+        # Swap roles: opponent and agent switch sides
         self.role *= -1
+        self.agent_role *= -1
 
     def reset_board(self):
         self.board.detach()
@@ -331,10 +314,10 @@ class TicTacToeGame():
         self.print_board()
 
     def print_board(self, board=None):
-        board = self.board if board == None else board
+        board = self.board if board is None else board
         print("_______")
         for a in range(board.size()[0]):
-            row = r""
+            row = ""
             for b in range(board.size()[1]):
                 row += "|" + self.positions[board[a][b].item()]
                 row += "|" if b == board.size()[1] - 1 else ""

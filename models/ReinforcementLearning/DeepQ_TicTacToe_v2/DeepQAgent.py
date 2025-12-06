@@ -6,6 +6,7 @@ import random
 import numpy as np
 from collections import deque
 import matplotlib.pyplot as plt
+from .logger import get_logger
 
 
 class DeepQAgent(nn.Module):
@@ -35,8 +36,14 @@ class DeepQAgent(nn.Module):
         super(DeepQAgent, self).__init__()
         self.PT_EXTENSION = ".pt"
         self.LOG_DETAILS = False
+        self.logger = get_logger(self.__class__.__name__)
 
-        self.device = device
+        # Validate and set device
+        if isinstance(device, str):
+            self.device = torch.device(device)
+        else:
+            self.device = device
+        
         self.epsilon = epsilon
         self.epsilon_min = 0.001 * epsilon
         self.epsilon_max = 1.0
@@ -51,12 +58,12 @@ class DeepQAgent(nn.Module):
         
         self.train_start = min(train_start, memory_max_len)
         if train_start >= memory_max_len:
-            print(f"Truncated agent.train_start to agent.memory_max_len: {memory_max_len}.")
+            self.logger.warning(f"Truncated agent.train_start to agent.memory_max_len: {memory_max_len}.")
 
         self.batch_size = batch_size
         self.memory = deque(maxlen=memory_max_len)
         self.memory_max_len = memory_max_len
-        self.loss_history = []
+        self.loss_history = []  # Bounded loss history
 
         self.policy_network = self.create_network()
         self.init_weights(self.policy_network)
@@ -65,15 +72,16 @@ class DeepQAgent(nn.Module):
             self.network_sync_rate = network_sync_rate
             self.target_network = self.create_network()
             self.copy_weights(self.policy_network, self.target_network)
+        
+        # Validate device consistency
+        self._validate_device_consistency()
 
     def create_network(self):
         network = nn.Sequential(
             nn.Linear(self.state_space, self.hidden_size),
-            # nn.BatchNorm1d(self.hidden_size),
             nn.ReLU(),
             nn.Dropout(self.dropout),
             nn.Linear(self.hidden_size, self.hidden_size),
-            # nn.BatchNorm1d(self.hidden_size),
             nn.ReLU(),
             nn.Dropout(self.dropout),
             nn.Linear(self.hidden_size, self.action_space)
@@ -98,7 +106,23 @@ class DeepQAgent(nn.Module):
     def copy_weights(self, from_network, to_network):
         to_network.load_state_dict(from_network.state_dict())
         if self.LOG_DETAILS:
-            print(f"Copied weights network weights.")
+            self.logger.debug(f"Copied weights network weights.")
+    
+    def _validate_device_consistency(self):
+        """Validate that all model components are on the same device."""
+        # Check policy network
+        policy_device = next(self.policy_network.parameters()).device
+        if policy_device != self.device:
+            raise RuntimeError(f"Policy network is on {policy_device} but agent device is {self.device}")
+        
+        # Check target network if it exists
+        if self.use_target_network:
+            target_device = next(self.target_network.parameters()).device
+            if target_device != self.device:
+                raise RuntimeError(f"Target network is on {target_device} but agent device is {self.device}")
+        
+        if self.LOG_DETAILS:
+            self.logger.debug(f"✓ Device consistency validated: all components on {self.device}")
 
     def forward(self, states, use_target_network=False):
         """
@@ -122,13 +146,24 @@ class DeepQAgent(nn.Module):
         else:
             return self.policy_network(states)
 
-    def select_action(self, state, mask, indicies):
-        # select action greedily with respect to state
-        # or select randomly from uniform distribution
+    def select_action(self, state, mask, indices):
+        """Select action using epsilon-greedy policy.
+
+        Args:
+            state: Current game state tensor
+            mask: Valid action mask (1 for valid, 0 for invalid)
+            indices: List of valid action indices
+
+        Returns:
+            int: Selected action index
+        """
         if np.random.rand() <= self.epsilon:
-            return np.random.choice(indicies)
+            return np.random.choice(indices)
         else:
             with torch.no_grad():
+                # Ensure state is on correct device
+                state = state.to(self.device)
+                mask = mask.to(self.device)
                 q_values = self.forward(state.reshape((1, self.state_space)))
 
                 # mask out invalid actions with -inf
@@ -138,7 +173,7 @@ class DeepQAgent(nn.Module):
                 noise = torch.randn_like(q_masked) * 1e-6
                 q_masked = q_masked + noise
 
-                return torch.argmax(q_masked)
+                return torch.argmax(q_masked).item()
 
     def prep_cosine_anneal(self, epsilon_min, epsilon_max, num_episodes):
         self.anneal_epsilon = True
@@ -146,50 +181,76 @@ class DeepQAgent(nn.Module):
             (1/2) * (epsilon_max - epsilon_min) * \
             (1 + np.cos((episode / num_episodes) * np.pi))
 
-    def decay_epsilon(self, episode: int = None):
+    def decay_epsilon(self, episode: int = -1):
         if self.anneal_epsilon:
             if self.cosine_anneal is None:
                 raise ValueError(
                     f"""(decay_epsilon:DeepQAgent.py) Cosine anneal has not been prepared.
                     Run 'prep_cosine_anneal' before training.""")
-            if episode is None:
+            if episode < 0:
                 raise ValueError(
                     f"""(decay_epsilon:DeepQAgent.py)
                     Must pass episode number in order to perform cosine annealing.
-                    Recieved {episode}.""")
+                    Received {episode}.""")
             self.epsilon = self.cosine_anneal(episode)
-        else:
+        elif not self.anneal_epsilon:  # Only do exponential decay if not using cosine
             # Exponential decay
-            self.epsilon = max(self.epsilon * self.epsilon_decay_rate, self.epsilon_min)
-            
+            self.epsilon = self.epsilon * self.epsilon_decay_rate
+        
         # Ensure epsilon stays within bounds
         self.epsilon = np.clip(self.epsilon, self.epsilon_min, self.epsilon_max)
 
     def remember(self, state, action, reward, next_state, done):
+        # Ensure states are on the correct device before storing
+        state = state.to(self.device) if torch.is_tensor(state) else state
+        next_state = next_state.to(self.device) if torch.is_tensor(next_state) else next_state
         self.memory.append((state, action, reward, next_state, done))
     
     def mask_invalid(self, q_values, state):
-        q_values_masked = q_values.clone().detach()
-        for i, cell in enumerate(state):
-            if cell != 0:
-                q_values_masked[i] = -1e9
-        return q_values_masked.to(self.device)
+        """Mask invalid actions in Q-values based on game state.
+        
+        Args:
+            q_values: Q-values tensor, shape (batch_size, action_space) or (action_space,)
+            state: Game state tensor, shape (batch_size, state_space) or (state_space,)
+        """
+        # Handle both batch and single input
+        if q_values.dim() == 1:
+            q_values_masked = q_values.clone().detach().to(self.device)
+            state = state.to(self.device)
+            for i, cell in enumerate(state):
+                if cell != 0:
+                    q_values_masked[i] = -1e9
+        else:
+            # Batch processing
+            q_values_masked = q_values.clone().detach().to(self.device)
+            state = state.to(self.device)
+            for batch_idx in range(q_values.size(0)):
+                for i, cell in enumerate(state[batch_idx]):
+                    if cell != 0:
+                        q_values_masked[batch_idx, i] = -1e9
+        
+        return q_values_masked
 
-    def replay(self, optimizer, criterion, episode: int = None):
+    def replay(self, optimizer, criterion, episode: int = -1):
         memory_length = len(self.memory)
         if memory_length < self.train_start or memory_length < self.batch_size:
             return
 
-        batch = random.sample(self.memory, min(memory_length, self.batch_size))
-        # rewards = [experience[2] for experience in batch]
-        # rewards_mean = np.mean(rewards)
-        # rewards_std = np.std(rewards)
+        # Thread-safe memory sampling with validation
+        try:
+            current_memory_length = len(self.memory)
+            if current_memory_length < self.batch_size:
+                return
+            batch = random.sample(list(self.memory), min(current_memory_length, self.batch_size))
+        except (IndexError, ValueError):
+            return  # Skip this replay if memory is being modified
 
         q_batch = []
         target_q_batch = []
         for state, action, reward, next_state, done in batch:
-            state = state.float().reshape(-1)
-            next_state = next_state.float().reshape(-1)
+            # Ensure all tensors are on correct device
+            state = state.float().reshape(-1).to(self.device)
+            next_state = next_state.float().reshape(-1).to(self.device)
             
             q_values = self.forward(state).squeeze()
             target_q_values = q_values.detach().clone()
@@ -240,19 +301,19 @@ class DeepQAgent(nn.Module):
         loss.backward()
 
         # Apply gradient clipping
-        torch.nn.utils.clip_grad_norm_(self.policy_network.parameters(), max_norm=1.0)
+        total_norm = torch.nn.utils.clip_grad_norm_(self.policy_network.parameters(), max_norm=1.0)
         
         if self.LOG_DETAILS:
-            total_norm = torch.nn.utils.clip_grad_norm_(self.policy_network.parameters(), max_norm=1.0)
-            print(f"\nTarget Q (sample): {target_q_batch[0]}")
-            print(f"clipped gradient norm: {total_norm}")
-            print(f"loss: {loss.item()}")
+            self.logger.debug(f"Target Q (sample): {target_q_batch[0]}")
+            self.logger.debug(f"clipped gradient norm: {total_norm}")
+            self.logger.debug(f"loss: {loss.item()}")
 
         optimizer.step()
 
     def get_loss_history(self, items_from_back: int = 0):
         if items_from_back <= 0:
             return self.loss_history
+        
         return self.loss_history[-items_from_back:]
 
     def plot_loss_history(self):
@@ -290,10 +351,11 @@ class DeepQAgent(nn.Module):
         if not os.path.exists(destination_path):
             os.makedirs(destination_path, exist_ok=True)
 
-        match = re.search(r'\d+K\+-?\d+K', name, re.IGNORECASE)
+        # Handle compound episode tags like "50K+50K" -> "100K"
+        match = re.search(r'(\d+)K\+(\d+)K', name, re.IGNORECASE)
         if match:
             tag = match.group(0)
-            total = eval(tag.upper().replace("K", "").replace("-", ""))
+            total = int(match.group(1)) + int(match.group(2))
             name = name.replace(tag, f"{total}K")
 
         filename = name if name.endswith(
@@ -301,14 +363,17 @@ class DeepQAgent(nn.Module):
         filepath = os.path.join(destination_path, filename)
 
         torch.save(self.policy_network.state_dict(), filepath)
-        print(f"Model saved to '{filepath}'.")
+        self.logger.info(f"Model saved to '{filepath}'.")
 
         return filepath
 
     def load_model(self, filepath: str = "", weights_only: bool = True):
         self.policy_network.load_state_dict(torch.load(
             filepath, weights_only=weights_only, map_location=self.device))
-        print(f"Model loaded from '{filepath}'.")
+        self.logger.info(f"Model loaded from '{filepath}'.")
 
         if self.use_target_network:
             self.copy_weights(self.policy_network, self.target_network)
+        
+        # Validate device consistency after loading
+        self._validate_device_consistency()
